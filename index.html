@@ -1,3 +1,7 @@
+Last login: Thu Mar 13 15:53:38 on ttys009
+lvfei@localhost ~ % cd "/Users/lvfei/Desktop/yaoren 5.0"
+cat index.html
+
 <!DOCTYPE html>
 <html lang="zh-CN" data-theme="dark">
 <head>
@@ -5,745 +9,60 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>随机抽取人名</title>
     
-    <!-- 强制使用 HTTPS -->
     <script>
+    // 强制使用 HTTPS
     if (window.location.protocol === 'http:' && window.location.hostname !== 'localhost') {
         window.location.href = window.location.href.replace('http:', 'https:');
     }
     </script>
     
-    <!-- Firebase SDK -->
-    <script src="https://www.gstatic.com/firebasejs/9.6.0/firebase-app-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/9.6.0/firebase-database-compat.js"></script>
-
-    <script>
-    // 全局变量和常量声明
-    const INITIAL_NAMES = [
-        { name: "梁晓珍", avatar: "assets/avatars/梁晓珍.png" },
-        { name: "常鸿祥", avatar: "assets/avatars/常鸿祥.png" },
-        { name: "韩烁", avatar: "assets/avatars/韩烁.png" },
-        { name: "荆文姗", avatar: "assets/avatars/荆文姗.png" },
-        { name: "励艳丽", avatar: "assets/avatars/励艳丽.png" },
-        { name: "吕飞", avatar: "assets/avatars/吕飞.png" },
-        { name: "邱宇宁", avatar: "assets/avatars/邱宇宁.png" },
-        { name: "任蒙龙", avatar: "assets/avatars/任蒙龙.png" },
-        { name: "王耀旭", avatar: "assets/avatars/王耀旭.png" },
-        { name: "喻言", avatar: "assets/avatars/喻言.png" },
-        { name: "张华珍", avatar: "assets/avatars/张华珍.png" },
-        { name: "张小莲", avatar: "assets/avatars/张小莲.png" }
-    ];
+    <!-- LeanCloud SDK -->
+    <script src="https://cdn.jsdelivr.net/npm/leancloud-storage@4.15.0/dist/av-min.js"></script>
     
-    const DB_NAME = 'YaorenDB';
-    const DB_VERSION = 1;
-    const API_URL = '/api';
-    const MAX_RETRIES = 3;
-    const SYNC_INTERVAL = 1000;
-
-    let names = [...INITIAL_NAMES];
-    let usedNames = new Set();
-    let isRolling = false;
-    let rollInterval;
-    let db;
-    let retryCount = 0;
-    let lastSyncTime = 0;
-
-    // 常量
-    const MAX_RETRIES = 3;
-    const SYNC_INTERVAL = 1000; // 1秒的同步间隔
-
-    // IndexedDB 配置
-    async function initDB() {
-        return new Promise((resolve, reject) => {
-            const request = indexedDB.open(DB_NAME, DB_VERSION);
-            
-            request.onerror = (event) => {
-                console.error('数据库错误:', event.target.error);
-                reject(event.target.error);
-            };
-            
-            request.onsuccess = (event) => {
-                db = event.target.result;
-                console.log('数据库连接成功');
-                resolve(db);
-            };
-            
-            request.onupgradeneeded = (event) => {
-                const db = event.target.result;
-                
-                // 创建存储对象
-                if (!db.objectStoreNames.contains('gameState')) {
-                    const store = db.createObjectStore('gameState', { keyPath: 'id' });
-                    store.createIndex('timestamp', 'timestamp', { unique: false });
-                }
-                
-                if (!db.objectStoreNames.contains('history')) {
-                    const historyStore = db.createObjectStore('history', { keyPath: 'id', autoIncrement: true });
-                    historyStore.createIndex('timestamp', 'timestamp', { unique: false });
-                }
-            };
-        });
-    }
-
-    // 保存状态到 IndexedDB
-    async function saveToServer() {
-        try {
-            console.log('开始保存数据...');
-            
-            const currentResult = {
-                name: document.querySelector('.result-name').textContent,
-                avatar: document.getElementById('resultAvatar').src,
-                display: document.getElementById('resultAvatar').style.display
-            };
-
-            const state = {
-                id: 'current',
-                names: names,
-                usedNames: Array.from(usedNames),
-                currentResult: currentResult,
-                timestamp: Date.now(),
-                version: '5.0'
-            };
-
-            const tx = db.transaction('gameState', 'readwrite');
-            const store = tx.objectStore('gameState');
-            await store.put(state);
-            
-            console.log('数据保存成功');
-            updateSyncStatus('数据已保存');
-            
-        } catch (error) {
-            console.error('保存失败:', error);
-            updateSyncStatus('保存失败: ' + error.message);
-            setTimeout(saveToServer, 3000);
-        }
-    }
-
-    // 从 IndexedDB 加载状态
-    async function loadFromServer() {
-        try {
-            const tx = db.transaction('gameState', 'readonly');
-            const store = tx.objectStore('gameState');
-            const request = store.get('current');
-            
-            return new Promise((resolve, reject) => {
-                request.onsuccess = (event) => {
-                    const data = event.target.result;
-                    if (data) {
-                        console.log('加载数据成功:', data);
-                        names = data.names;
-                        usedNames = new Set(data.usedNames);
-                        
-                        if (data.currentResult) {
-                            updateResultDisplay(data.currentResult);
-                        }
-                        
-                        updateLists();
-                        updateSyncStatus('数据已同步');
-                    }
-                    resolve(data);
-                };
-                
-                request.onerror = (event) => {
-                    console.error('加载数据失败:', event.target.error);
-                    reject(event.target.error);
-                };
-            });
-        } catch (error) {
-            console.error('加载失败:', error);
-            updateSyncStatus('加载失败');
-        }
-    }
-
-    // 保存抽取结果到历史记录
-    async function saveResult(name, avatar) {
-        try {
-            const tx = db.transaction('history', 'readwrite');
-            const store = tx.objectStore('history');
-            
-            await store.add({
-                name: name,
-                avatar: avatar,
-                timestamp: Date.now()
-            });
-            
-            updateSyncStatus('结果已保存');
-            await loadHistory();  // 刷新历史记录显示
-        } catch (error) {
-            console.error('保存结果失败:', error);
-            setTimeout(() => saveResult(name, avatar), 3000);
-        }
-    }
-
-    // 加载历史记录
-    async function loadHistory() {
-        try {
-            const tx = db.transaction('history', 'readonly');
-            const store = tx.objectStore('history');
-            const index = store.index('timestamp');
-            
-            const request = index.openCursor(null, 'prev');
-            const results = [];
-            
-            return new Promise((resolve, reject) => {
-                request.onsuccess = (event) => {
-                    const cursor = event.target.result;
-                    if (cursor && results.length < 10) {
-                        results.push(cursor.value);
-                        cursor.continue();
-                    } else {
-                        const historyList = document.getElementById('historyList');
-                        if (historyList) {
-                            historyList.innerHTML = '';
-                            results.forEach(result => {
-                                const historyItem = document.createElement('div');
-                                historyItem.className = 'history-item';
-                                historyItem.innerHTML = `
-                                    <img src="${result.avatar || 'assets/default-avatar.png'}" alt="${result.name}">
-                                    <div>
-                                        <div>${result.name}</div>
-                                        <div class="time">${new Date(result.timestamp).toLocaleString('zh-CN')}</div>
-                                    </div>
-                                `;
-                                historyList.appendChild(historyItem);
-                            });
-                        }
-                        resolve(results);
-                    }
-                };
-                
-                request.onerror = (event) => {
-                    console.error('加载历史记录失败:', event.target.error);
-                    reject(event.target.error);
-                };
-            });
-        } catch (error) {
-            console.error('加载历史记录失败:', error);
-        }
-    }
-
-    // 配置API地址
-    const API_URL = '/api';
-
-    // 添加错误处理和重试机制
-    async function retryOperation(operation, errorMessage) {
-        retryCount = 0;
-        while (retryCount < MAX_RETRIES) {
-            try {
-                const result = await operation();
-                retryCount = 0;  // 重置重试计数
-                return result;
-            } catch (error) {
-                retryCount++;
-                console.error(`${errorMessage} (尝试 ${retryCount}/${MAX_RETRIES}):`, error);
-                if (retryCount === MAX_RETRIES) {
-                    updateSyncStatus('同步失败，请检查网络连接');
-                    throw error;
-                }
-                // 指数退避重试
-                await new Promise(resolve => setTimeout(resolve, Math.pow(2, retryCount) * 1000));
-            }
-        }
-    }
-
-    // 优化数据加载
-    async function loadFromServer() {
-        const now = Date.now();
-        if (now - lastSyncTime < SYNC_INTERVAL) {
-            return; // 防止过于频繁的同步
-        }
-        
-        try {
-            // 创建查询
-            const query = new AV.Query('GameState');
-            query.descending('createdAt');
-            query.limit(1);
-            
-            // 执行查询
-            const result = await query.first();
-            if (result) {
-                const newNames = result.get('names');
-                const newUsedNames = new Set(result.get('usedNames'));
-                const currentResult = result.get('currentResult');
-                
-                // 检查是否有实际变化
-                const namesChanged = JSON.stringify(names) !== JSON.stringify(newNames);
-                const usedNamesChanged = JSON.stringify(Array.from(usedNames)) !== JSON.stringify(Array.from(newUsedNames));
-                
-                if (namesChanged || usedNamesChanged) {
-                    names = newNames;
-                    usedNames = newUsedNames;
-                    
-                    if (currentResult) {
-                        updateResultDisplay(currentResult);
-                    }
-                    
-                    updateLists();
-                    updateSyncStatus('数据已更新');
-                }
-            }
-            
-            lastSyncTime = now;
-        } catch (error) {
-            console.error('同步失败:', error);
-            updateSyncStatus('同步失败');
-        }
-    }
-
-    // 优化结果显示更新
-    function updateResultDisplay(resultData) {
-        const resultAvatar = document.getElementById('resultAvatar');
-        const resultName = document.querySelector('.result-name');
-        
-        if (resultData.name !== resultName.textContent) {
-            resultName.textContent = resultData.name;
-            if (resultData.avatar) {
-                resultAvatar.src = resultData.avatar;
-                resultAvatar.style.display = resultData.display;
-            } else {
-                resultAvatar.style.display = 'none';
-            }
-        }
-    }
-
-    // 优化页面加载初始化
-    window.onload = async function() {
-        try {
-            // 初始化数据库
-            await initDB();
-            
-            // 初始化界面
-            initTheme();
-            updateDateDisplay();
-            setupDragAndDrop();
-            
-            // 加载数据
-            await loadFromServer();
-            await loadHistory();
-            
-            // 设置定期同步检查
-            setInterval(loadFromServer, 1000);
-            
-            // 页面可见性变化监听
-            document.addEventListener('visibilitychange', function() {
-                if (!document.hidden) {
-                    loadFromServer();
-                }
-            });
-            
-            console.log('页面初始化完成');
-            
-        } catch (error) {
-            console.error('页面初始化失败:', error);
-            alert('页面初始化失败，请刷新重试');
-        }
-    };
-
-    // 从服务器加载状态
-    async function loadStateFromServer() {
-        try {
-            const response = await fetch(`${API_URL}/state`);
-            const state = await response.json();
-            if (state && state.usedNames) {
-                usedNames = new Set(state.usedNames);
-                updateLists();
-                updateResult(null);
-            }
-        } catch (error) {
-            console.error('加载状态失败:', error);
-        }
-    }
-
-    // 保存状态到服务器
-    async function saveStateToServer() {
-        try {
-            const state = {
-                usedNames: Array.from(usedNames)
-            };
-            
-            await fetch(`${API_URL}/state`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(state)
-            });
-        } catch (error) {
-            console.error('保存状态失败:', error);
-        }
-    }
-
-    function createNameItem(nameData) {
-        const div = document.createElement('div');
-        div.className = 'name-item';
-        
-        const nameContent = document.createElement('div');
-        nameContent.className = 'name-content';
-        
-        if (typeof nameData === 'object' && nameData.avatar) {
-            const avatar = document.createElement('img');
-            avatar.className = 'avatar';
-            avatar.src = nameData.avatar;
-            avatar.alt = nameData.name;
-            avatar.onerror = function() {
-                this.src = 'assets/default-avatar.png';
-            };
-            nameContent.appendChild(avatar);
-        }
-        
-        const nameSpan = document.createElement('span');
-        nameSpan.textContent = typeof nameData === 'object' ? nameData.name : nameData;
-        nameContent.appendChild(nameSpan);
-        
-        const deleteBtn = document.createElement('button');
-        deleteBtn.className = 'delete-btn';
-        deleteBtn.textContent = '删除';
-        deleteBtn.onclick = async (e) => {
-            e.stopPropagation();
-            const name = typeof nameData === 'object' ? nameData.name : nameData;
-            if (confirm(`确定要删除 ${name} 吗？`)) {
-                try {
-                    // 直接从本地删除，不调用API
-                    names = names.filter(n => (typeof n === 'object' ? n.name : n) !== name);
-                    usedNames.delete(name);
-                    updateLists();
-                    updateSyncStatus('删除成功');
-                    // 保存更改
-                    await saveToServer();
-                } catch (error) {
-                    console.error('删除失败:', error);
-                    alert('删除失败，请重试');
-                    updateSyncStatus('删除失败');
-                }
-            }
-        };
-        
-        div.appendChild(nameContent);
-        div.appendChild(deleteBtn);
-        div.draggable = true;
-        
-        div.addEventListener('dragstart', function(e) {
-            e.target.classList.add('dragging');
-            e.dataTransfer.setData('text/plain', typeof nameData === 'object' ? nameData.name : nameData);
-        });
-        
-        div.addEventListener('dragend', function(e) {
-            e.target.classList.remove('dragging');
-        });
-        
-        return div;
-    }
-
-    function updateLists() {
-        const remainingList = document.getElementById('remainingList');
-        const usedList = document.getElementById('usedList');
-        
-        remainingList.innerHTML = '';
-        usedList.innerHTML = '';
-        
-        // 更新待抽取名单
-        names.filter(name => !usedNames.has(typeof name === 'object' ? name.name : name))
-            .forEach(name => {
-                remainingList.appendChild(createNameItem(name));
-            });
-        
-        // 更新已抽取名单
-        Array.from(usedNames).forEach(name => {
-            const nameData = names.find(n => (typeof n === 'object' ? n.name : n) === name);
-            usedList.appendChild(createNameItem(nameData || name));
-        });
-    }
-
-    function setupDragAndDrop() {
-        const lists = [
-            document.getElementById('remainingList'),
-            document.getElementById('usedList')
-        ];
-        
-        lists.forEach(list => {
-            list.addEventListener('dragover', function(e) {
-                e.preventDefault();
-            });
-            
-            list.addEventListener('drop', function(e) {
-                e.preventDefault();
-                const name = e.dataTransfer.getData('text/plain');
-                
-                if (this.id === 'usedList') {
-                    usedNames.add(name);
-                } else {
-                    usedNames.delete(name);
-                }
-                
-                updateLists();
-                saveToServer();  // 保存拖拽后的状态
-            });
-        });
-    }
-
-    function updateResult(nameData) {
-        const resultElement = document.getElementById('result');
-        const resultAvatar = document.getElementById('resultAvatar');
-        const resultNameDiv = resultElement.querySelector('.result-name');
-        
-        if (nameData === null) {
-            resultAvatar.style.display = 'none';
-            resultNameDiv.textContent = '等待抽取...';
-            saveToServer();  // 保存状态
-            return;
-        }
-        
-        if (typeof nameData === 'object' && nameData.avatar) {
-            resultAvatar.src = nameData.avatar;
-            resultAvatar.style.display = 'block';
-            resultNameDiv.textContent = nameData.name;
-        } else {
-            resultAvatar.style.display = 'none';
-            resultNameDiv.textContent = nameData;
-        }
-        saveToServer();  // 保存状态
-    }
-
-    // 修改原有的 startRoll 函数
-    async function startRoll() {
-        if (isRolling) return;
-        
-        const remainingList = document.getElementById('remainingList');
-        if (remainingList.children.length === 0) {
-            alert('没有可抽取的名字了！');
-            return;
-        }
-        
-        isRolling = true;
-        const result = document.querySelector('#result .result-name');
-        const resultAvatar = document.getElementById('resultAvatar');
-        const rollButton = document.querySelector('.roll-button');
-        rollButton.disabled = true;
-        
-        try {
-            let count = 0;
-            const maxCount = 20;
-            const interval = setInterval(async () => {
-                try {
-                    const remainingNames = names.filter(n => !usedNames.has(typeof n === 'object' ? n.name : n));
-                    if (remainingNames.length === 0) {
-                        clearInterval(interval);
-                        throw new Error('没有可抽取的名字了！');
-                    }
-                    
-                    const randomIndex = Math.floor(Math.random() * remainingNames.length);
-                    const selectedName = remainingNames[randomIndex];
-                    
-                    result.textContent = typeof selectedName === 'object' ? selectedName.name : selectedName;
-                    if (typeof selectedName === 'object' && selectedName.avatar) {
-                        resultAvatar.src = selectedName.avatar;
-                        resultAvatar.style.display = 'block';
-                    } else {
-                        resultAvatar.style.display = 'none';
-                    }
-                    
-                    count++;
-                    if (count >= maxCount) {
-                        clearInterval(interval);
-                        isRolling = false;
-                        rollButton.disabled = false;
-                        
-                        // 更新名单状态
-                        const finalName = typeof selectedName === 'object' ? selectedName.name : selectedName;
-                        usedNames.add(finalName);
-                        
-                        // 保存到LeanCloud
-                        await saveResult(finalName, typeof selectedName === 'object' ? selectedName.avatar : null);
-                        
-                        // 更新UI
-                        updateLists();
-                        const usedList = document.getElementById('usedList');
-                        usedList.scrollTop = 0;
-                        
-                        // 保存状态
-                        await saveToServer();
-                    }
-                } catch (error) {
-                    console.error('滚动过程中出错:', error);
-                    clearInterval(interval);
-                    isRolling = false;
-                    rollButton.disabled = false;
-                    updateSyncStatus('抽取过程出错');
-                }
-            }, 100);
-        } catch (error) {
-            console.error('启动抽取过程失败:', error);
-            isRolling = false;
-            rollButton.disabled = false;
-            updateSyncStatus('启动抽取失败');
-        }
-    }
-
-    async function addNewName() {
-        const input = document.getElementById('newNameInput');
-        const newName = input.value.trim();
-        const avatarInput = document.getElementById('avatarInput');
-        
-        if (!newName) {
-            alert('请输入名字！');
-            return;
-        }
-        
-        if (names.some(n => (typeof n === 'object' ? n.name : n) === newName)) {
-            alert('该名字已存在！');
-            return;
-        }
-
-        let avatarPath = null;
-        if (avatarInput.files && avatarInput.files[0]) {
-            try {
-                const file = avatarInput.files[0];
-                const reader = new FileReader();
-                
-                // 使用Promise包装FileReader
-                avatarPath = await new Promise((resolve, reject) => {
-                    reader.onload = function(e) {
-                        resolve(e.target.result); // 直接使用Base64数据
-                    };
-                    reader.onerror = function(e) {
-                        reject(new Error('头像读取失败'));
-                    };
-                    reader.readAsDataURL(file);
-                });
-            } catch (error) {
-                console.error('头像处理失败:', error);
-                alert('头像处理失败，将使用默认头像');
-                avatarPath = null;
-            }
-        }
-        
-        // 创建新的名字对象
-        const newNameObj = {
-            name: newName,
-            avatar: avatarPath || 'assets/default-avatar.png'
-        };
-        
-        // 添加到名单中
-        names.push(newNameObj);
-        
-        // 清空输入框和预览
-        input.value = '';
-        avatarInput.value = '';
-        document.getElementById('avatarPreview').style.display = 'none';
-        
-        // 更新列表显示
-        updateLists();
-        
-        // 保存到服务器
-        await saveToServer();
-        updateSyncStatus('添加成功');
-    }
-
-    // 添加头像预览功能
-    document.getElementById('avatarInput').addEventListener('change', function(e) {
-        const preview = document.getElementById('avatarPreview');
-        const file = e.target.files[0];
-        
-        if (file) {
-            const reader = new FileReader();
-            reader.onload = function(e) {
-                preview.src = e.target.result;
-                preview.style.display = 'block';
-            }
-            reader.onerror = function(e) {
-                console.error('头像预览失败:', e);
-                preview.style.display = 'none';
-                alert('头像预览失败，请重试');
-            }
-            reader.readAsDataURL(file);
-        } else {
-            preview.style.display = 'none';
-        }
+    <script>
+    // LeanCloud 配置
+    AV.init({
+        appId: "bJFkVPrvNHE1v048qwrDStj7-MdYXbMMI",      // AppID
+        appKey: "dycRjaTd8OXZmclQ899Z7nJR",    // AppKey
+        serverURL: "https://bjfkvprv.api.lncldglobal.com" // REST API 服务器地址
     });
 
-    // 修改重置函数
-    function resetList() {
-        if (isRolling) return;
-        if (!confirm('确定要重置名单吗？这将清空已抽取的记录。')) return;
-        
-        names = [...INITIAL_NAMES];
-        usedNames.clear();
-        updateLists();
-        updateResult(null);
-        saveToServer();
-    }
-
-    // 点击模态框外部时关闭
-    window.onclick = function(event) {
-        const saveModal = document.getElementById('saveModal');
-        if (event.target == saveModal) {
-            saveModal.classList.remove('show');
+    // 实时查询设置
+    let liveQueryClient;
+    async function setupLiveQuery() {
+        try {
+            // 创建实时查询客户端
+            liveQueryClient = await AV.LiveQuery.init({
+                appId: "bJFkVPrvNHE1v048qwrDStj7-MdYXbMMI",
+                appKey: "dycRjaTd8OXZmclQ899Z7nJR",
+                serverURL: "https://bjfkvprv.api.lncldglobal.com"
+            });
+            
+            const query = new AV.Query('GameState');
+            const subscription = await query.subscribe();
+            
+            // 监听创建事件
+            subscription.on('create', (gameState) => {
+                console.log('收到新数据');
+                loadFromServer();
+            });
+            
+            // 监听更新事件
+            subscription.on('update', (gameState) => {
+                console.log('收到更新');
+                loadFromServer();
+            });
+            
+            // 监听删除事件
+            subscription.on('delete', () => {
+                console.log('数据被删除');
+                loadFromServer();
+            });
+            
+            console.log('实时查询设置完成');
+        } catch (error) {
+            console.error('设置实时查询失败:', error);
         }
-    }
-
-    // 添加主题切换功能
-    function toggleTheme() {
-        const html = document.documentElement;
-        const currentTheme = html.getAttribute('data-theme');
-        const newTheme = currentTheme === 'light' ? 'dark' : 'light';
-        html.setAttribute('data-theme', newTheme);
-        localStorage.setItem('theme', newTheme);
-    }
-
-    // 在页面加载时恢复保存的主题
-    function initTheme() {
-        const savedTheme = localStorage.getItem('theme');
-        // 如果没有保存的主题或者是light主题，都设置为dark主题
-        if (!savedTheme || savedTheme === 'light') {
-            localStorage.setItem('theme', 'dark');
-        }
-        document.documentElement.setAttribute('data-theme', localStorage.getItem('theme'));
-    }
-
-    // 添加更新日期显示的函数
-    function updateDateDisplay() {
-        const now = new Date();
-        const options = { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' };
-        const dateStr = now.toLocaleDateString('zh-CN', options);
-        document.getElementById('dateDisplay').textContent = dateStr;
-    }
-
-    // 修改显示保存对话框的函数
-    function showSaveModal() {
-        const modal = document.getElementById('saveModal');
-        const stateDisplay = document.getElementById('stateDisplay');
-        const state = {
-            usedNames: Array.from(usedNames),
-            lastResult: document.querySelector('.result-name').textContent,
-            lastAvatarSrc: document.getElementById('resultAvatar').src,
-            lastAvatarDisplay: document.getElementById('resultAvatar').style.display
-        };
-        
-        stateDisplay.textContent = 'const SAVED_STATE = ' + JSON.stringify(state, null, 2) + ';';
-        modal.classList.add('show');
-    }
-
-    // 修改关闭对话框的函数
-    function closeModal() {
-        document.getElementById('saveModal').classList.remove('show');
-    }
-
-    // 修改同步状态显示函数
-    function updateSyncStatus(message) {
-        const syncStatus = document.getElementById('syncStatus');
-        syncStatus.textContent = `同步状态: ${message}`;
-        
-        // 添加视觉反馈
-        syncStatus.style.opacity = '1';
-        syncStatus.style.backgroundColor = message.includes('失败') ? '#ff4d4f' : '#52c41a';
-        syncStatus.style.color = '#ffffff';
-        
-        // 3秒后恢复默认状态
-        setTimeout(() => {
-            syncStatus.textContent = '同步状态: 已连接';
-            syncStatus.style.backgroundColor = 'var(--card-bg)';
-            syncStatus.style.color = 'var(--text-color)';
-            syncStatus.style.opacity = '0.8';
-        }, 3000);
     }
     </script>
     <style>
@@ -1281,42 +600,642 @@
     </div>
 
     <script>
-    // 全局变量和常量声明
-    const INITIAL_NAMES = [
-        { name: "梁晓珍", avatar: "assets/avatars/梁晓珍.png" },
-        { name: "常鸿祥", avatar: "assets/avatars/常鸿祥.png" },
-        { name: "韩烁", avatar: "assets/avatars/韩烁.png" },
-        { name: "荆文姗", avatar: "assets/avatars/荆文姗.png" },
-        { name: "励艳丽", avatar: "assets/avatars/励艳丽.png" },
-        { name: "吕飞", avatar: "assets/avatars/吕飞.png" },
-        { name: "邱宇宁", avatar: "assets/avatars/邱宇宁.png" },
-        { name: "任蒙龙", avatar: "assets/avatars/任蒙龙.png" },
-        { name: "王耀旭", avatar: "assets/avatars/王耀旭.png" },
-        { name: "喻言", avatar: "assets/avatars/喻言.png" },
-        { name: "张华珍", avatar: "assets/avatars/张华珍.png" },
-        { name: "张小莲", avatar: "assets/avatars/张小莲.png" }
-    ];
+        // 初始名单
+        const INITIAL_NAMES = [
+            { name: "梁晓珍", avatar: "assets/avatars/梁晓珍.png" },
+            { name: "常鸿祥", avatar: "assets/avatars/常鸿祥.png" },
+            { name: "韩烁", avatar: "assets/avatars/韩烁.png" },
+            { name: "荆文姗", avatar: "assets/avatars/荆文姗.png" },
+            { name: "励艳丽", avatar: "assets/avatars/励艳丽.png" },
+            { name: "吕飞", avatar: "assets/avatars/吕飞.png" },
+            { name: "邱宇宁", avatar: "assets/avatars/邱宇宁.png" },
+            { name: "任蒙龙", avatar: "assets/avatars/任蒙龙.png" },
+            { name: "王耀旭", avatar: "assets/avatars/王耀旭.png" },
+            { name: "喻言", avatar: "assets/avatars/喻言.png" },
+            { name: "张华珍", avatar: "assets/avatars/张华珍.png" },
+            { name: "张小莲", avatar: "assets/avatars/张小莲.png" }
+        ];
+        
+        let names = [...INITIAL_NAMES];
+        let usedNames = new Set();
+        let isRolling = false;
+        let rollInterval;
+        
+        // 配置API地址
+        const API_URL = '/api';
 
-    const DB_NAME = 'YaorenDB';
-    const DB_VERSION = 1;
-    const API_URL = '/api';
-    const MAX_RETRIES = 3;
-    const SYNC_INTERVAL = 1000;
+        // 添加错误处理和重试机制
+        let retryCount = 0;
+        const MAX_RETRIES = 3;
+        
+        async function retryOperation(operation, errorMessage) {
+            retryCount = 0;
+            while (retryCount < MAX_RETRIES) {
+                try {
+                    const result = await operation();
+                    retryCount = 0;  // 重置重试计数
+                    return result;
+                } catch (error) {
+                    retryCount++;
+                    console.error(`${errorMessage} (尝试 ${retryCount}/${MAX_RETRIES}):`, error);
+                    if (retryCount === MAX_RETRIES) {
+                        updateSyncStatus('同步失败，请检查网络连接');
+                        throw error;
+                    }
+                    // 指数退避重试
+                    await new Promise(resolve => setTimeout(resolve, Math.pow(2, retryCount) * 1000));
+                }
+            }
+        }
 
-    let names = [...INITIAL_NAMES];
-    let usedNames = new Set();
-    let isRolling = false;
-    let rollInterval;
-    let db;
-    let retryCount = 0;
-    let lastSyncTime = 0;
+        // 优化数据加载
+        let lastSyncTime = 0;
+        const SYNC_INTERVAL = 1000; // 1秒的同步间隔
 
-    // 强制使用 HTTPS
-    if (window.location.protocol === 'http:' && window.location.hostname !== 'localhost') {
-        window.location.href = window.location.href.replace('http:', 'https:');
-    }
+        async function loadFromServer() {
+            const now = Date.now();
+            if (now - lastSyncTime < SYNC_INTERVAL) {
+                return; // 防止过于频繁的同步
+            }
+            
+            try {
+                // 创建查询
+                const query = new AV.Query('GameState');
+                query.descending('createdAt');
+                query.limit(1);
+                
+                // 执行查询
+                const result = await query.first();
+                if (result) {
+                    const newNames = result.get('names');
+                    const newUsedNames = new Set(result.get('usedNames'));
+                    const currentResult = result.get('currentResult');
+                    
+                    // 检查是否有实际变化
+                    const namesChanged = JSON.stringify(names) !== JSON.stringify(newNames);
+                    const usedNamesChanged = JSON.stringify(Array.from(usedNames)) !== JSON.stringify(Array.from(newUsedNames));
+                    
+                    if (namesChanged || usedNamesChanged) {
+                        names = newNames;
+                        usedNames = newUsedNames;
+                        
+                        if (currentResult) {
+                            updateResultDisplay(currentResult);
+                        }
+                        
+                        updateLists();
+                        updateSyncStatus('数据已更新');
+                    }
+                }
+                
+                lastSyncTime = now;
+            } catch (error) {
+                console.error('同步失败:', error);
+                updateSyncStatus('同步失败');
+            }
+        }
 
-    // ... rest of the existing JavaScript code ...
+        // 优化结果显示更新
+        function updateResultDisplay(resultData) {
+            const resultAvatar = document.getElementById('resultAvatar');
+            const resultName = document.querySelector('.result-name');
+            
+            if (resultData.name !== resultName.textContent) {
+                resultName.textContent = resultData.name;
+                if (resultData.avatar) {
+                    resultAvatar.src = resultData.avatar;
+                    resultAvatar.style.display = resultData.display;
+                } else {
+                    resultAvatar.style.display = 'none';
+                }
+            }
+        }
+
+        // 优化页面加载初始化
+        window.onload = async function() {
+            try {
+                await retryOperation(async () => {
+                    initTheme();
+                    updateLists();
+                    setupDragAndDrop();
+                    updateDateDisplay();
+                    
+                    // 初始加载
+                    await loadFromServer();
+                    
+                    // 设置定期同步
+                    setInterval(loadFromServer, SYNC_INTERVAL);
+                    
+                    // 页面可见性变化监听
+                    document.addEventListener('visibilitychange', function() {
+                        if (!document.hidden) {
+                            loadFromServer();
+                        }
+                    });
+                }, '初始化失败');
+            } catch (error) {
+                console.error('页面初始化失败:', error);
+                alert('页面初始化失败，请刷新重试');
+            }
+        };
+
+        // 从服务器加载状态
+        async function loadStateFromServer() {
+            try {
+                const response = await fetch(`${API_URL}/state`);
+                const state = await response.json();
+                if (state && state.usedNames) {
+                    usedNames = new Set(state.usedNames);
+                    updateLists();
+                    updateResult(null);
+                }
+            } catch (error) {
+                console.error('加载状态失败:', error);
+            }
+        }
+
+        // 保存状态到服务器
+        async function saveStateToServer() {
+            try {
+                const state = {
+                    usedNames: Array.from(usedNames)
+                };
+                
+                await fetch(`${API_URL}/state`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(state)
+                });
+            } catch (error) {
+                console.error('保存状态失败:', error);
+            }
+        }
+
+        function createNameItem(nameData) {
+            const div = document.createElement('div');
+            div.className = 'name-item';
+            
+            const nameContent = document.createElement('div');
+            nameContent.className = 'name-content';
+            
+            if (typeof nameData === 'object' && nameData.avatar) {
+                const avatar = document.createElement('img');
+                avatar.className = 'avatar';
+                avatar.src = nameData.avatar;
+                avatar.alt = nameData.name;
+                avatar.onerror = function() {
+                    this.src = 'assets/default-avatar.png';
+                };
+                nameContent.appendChild(avatar);
+            }
+            
+            const nameSpan = document.createElement('span');
+            nameSpan.textContent = typeof nameData === 'object' ? nameData.name : nameData;
+            nameContent.appendChild(nameSpan);
+            
+            const deleteBtn = document.createElement('button');
+            deleteBtn.className = 'delete-btn';
+            deleteBtn.textContent = '删除';
+            deleteBtn.onclick = async (e) => {
+                e.stopPropagation();
+                const name = typeof nameData === 'object' ? nameData.name : nameData;
+                if (confirm(`确定要删除 ${name} 吗？`)) {
+                    try {
+                        // 直接从本地删除，不调用API
+                        names = names.filter(n => (typeof n === 'object' ? n.name : n) !== name);
+                        usedNames.delete(name);
+                        updateLists();
+                        updateSyncStatus('删除成功');
+                        // 保存更改
+                        await saveToServer();
+                    } catch (error) {
+                        console.error('删除失败:', error);
+                        alert('删除失败，请重试');
+                        updateSyncStatus('删除失败');
+                    }
+                }
+            };
+            
+            div.appendChild(nameContent);
+            div.appendChild(deleteBtn);
+            div.draggable = true;
+            
+            div.addEventListener('dragstart', function(e) {
+                e.target.classList.add('dragging');
+                e.dataTransfer.setData('text/plain', typeof nameData === 'object' ? nameData.name : nameData);
+            });
+            
+            div.addEventListener('dragend', function(e) {
+                e.target.classList.remove('dragging');
+            });
+            
+            return div;
+        }
+
+        function updateLists() {
+            const remainingList = document.getElementById('remainingList');
+            const usedList = document.getElementById('usedList');
+            
+            remainingList.innerHTML = '';
+            usedList.innerHTML = '';
+            
+            // 更新待抽取名单
+            names.filter(name => !usedNames.has(typeof name === 'object' ? name.name : name))
+                .forEach(name => {
+                    remainingList.appendChild(createNameItem(name));
+                });
+            
+            // 更新已抽取名单
+            Array.from(usedNames).forEach(name => {
+                const nameData = names.find(n => (typeof n === 'object' ? n.name : n) === name);
+                usedList.appendChild(createNameItem(nameData || name));
+            });
+        }
+
+        function setupDragAndDrop() {
+            const lists = [
+                document.getElementById('remainingList'),
+                document.getElementById('usedList')
+            ];
+            
+            lists.forEach(list => {
+                list.addEventListener('dragover', function(e) {
+                    e.preventDefault();
+                });
+                
+                list.addEventListener('drop', function(e) {
+                    e.preventDefault();
+                    const name = e.dataTransfer.getData('text/plain');
+                    
+                    if (this.id === 'usedList') {
+                        usedNames.add(name);
+                    } else {
+                        usedNames.delete(name);
+                    }
+                    
+                    updateLists();
+                    saveToServer();  // 保存拖拽后的状态
+                });
+            });
+        }
+
+        function updateResult(nameData) {
+            const resultElement = document.getElementById('result');
+            const resultAvatar = document.getElementById('resultAvatar');
+            const resultNameDiv = resultElement.querySelector('.result-name');
+            
+            if (nameData === null) {
+                resultAvatar.style.display = 'none';
+                resultNameDiv.textContent = '等待抽取...';
+                saveToServer();  // 保存状态
+                return;
+            }
+            
+            if (typeof nameData === 'object' && nameData.avatar) {
+                resultAvatar.src = nameData.avatar;
+                resultAvatar.style.display = 'block';
+                resultNameDiv.textContent = nameData.name;
+            } else {
+                resultAvatar.style.display = 'none';
+                resultNameDiv.textContent = nameData;
+            }
+            saveToServer();  // 保存状态
+        }
+
+        // 修改原有的 startRoll 函数
+        async function startRoll() {
+            if (isRolling) return;
+            
+            const remainingList = document.getElementById('remainingList');
+            if (remainingList.children.length === 0) {
+                alert('没有可抽取的名字了！');
+                return;
+            }
+            
+            isRolling = true;
+            const result = document.querySelector('#result .result-name');
+            const resultAvatar = document.getElementById('resultAvatar');
+            const rollButton = document.querySelector('.roll-button');
+            rollButton.disabled = true;
+            
+            try {
+                let count = 0;
+                const maxCount = 20;
+                const interval = setInterval(async () => {
+                    try {
+                        const remainingNames = names.filter(n => !usedNames.has(typeof n === 'object' ? n.name : n));
+                        if (remainingNames.length === 0) {
+                            clearInterval(interval);
+                            throw new Error('没有可抽取的名字了！');
+                        }
+                        
+                        const randomIndex = Math.floor(Math.random() * remainingNames.length);
+                        const selectedName = remainingNames[randomIndex];
+                        
+                        result.textContent = typeof selectedName === 'object' ? selectedName.name : selectedName;
+                        if (typeof selectedName === 'object' && selectedName.avatar) {
+                            resultAvatar.src = selectedName.avatar;
+                            resultAvatar.style.display = 'block';
+                        } else {
+                            resultAvatar.style.display = 'none';
+                        }
+                        
+                        count++;
+                        if (count >= maxCount) {
+                            clearInterval(interval);
+                            isRolling = false;
+                            rollButton.disabled = false;
+                            
+                            // 更新名单状态
+                            const finalName = typeof selectedName === 'object' ? selectedName.name : selectedName;
+                            usedNames.add(finalName);
+                            
+                            // 保存到LeanCloud
+                            await saveResult(finalName, typeof selectedName === 'object' ? selectedName.avatar : null);
+                            
+                            // 更新UI
+                            updateLists();
+                            const usedList = document.getElementById('usedList');
+                            usedList.scrollTop = 0;
+                            
+                            // 保存状态
+                            await saveToServer();
+                        }
+                    } catch (error) {
+                        console.error('滚动过程中出错:', error);
+                        clearInterval(interval);
+                        isRolling = false;
+                        rollButton.disabled = false;
+                        updateSyncStatus('抽取过程出错');
+                    }
+                }, 100);
+            } catch (error) {
+                console.error('启动抽取过程失败:', error);
+                isRolling = false;
+                rollButton.disabled = false;
+                updateSyncStatus('启动抽取失败');
+            }
+        }
+
+        async function addNewName() {
+            const input = document.getElementById('newNameInput');
+            const newName = input.value.trim();
+            const avatarInput = document.getElementById('avatarInput');
+            
+            if (!newName) {
+                alert('请输入名字！');
+                return;
+            }
+            
+            if (names.some(n => (typeof n === 'object' ? n.name : n) === newName)) {
+                alert('该名字已存在！');
+                return;
+            }
+
+            let avatarPath = null;
+            if (avatarInput.files && avatarInput.files[0]) {
+                try {
+                    const file = avatarInput.files[0];
+                    const reader = new FileReader();
+                    
+                    // 使用Promise包装FileReader
+                    avatarPath = await new Promise((resolve, reject) => {
+                        reader.onload = function(e) {
+                            resolve(e.target.result); // 直接使用Base64数据
+                        };
+                        reader.onerror = function(e) {
+                            reject(new Error('头像读取失败'));
+                        };
+                        reader.readAsDataURL(file);
+                    });
+                } catch (error) {
+                    console.error('头像处理失败:', error);
+                    alert('头像处理失败，将使用默认头像');
+                    avatarPath = null;
+                }
+            }
+            
+            // 创建新的名字对象
+            const newNameObj = {
+                name: newName,
+                avatar: avatarPath || 'assets/default-avatar.png'
+            };
+            
+            // 添加到名单中
+            names.push(newNameObj);
+            
+            // 清空输入框和预览
+            input.value = '';
+            avatarInput.value = '';
+            document.getElementById('avatarPreview').style.display = 'none';
+            
+            // 更新列表显示
+            updateLists();
+            
+            // 保存到服务器
+            await saveToServer();
+            updateSyncStatus('添加成功');
+        }
+
+        // 添加头像预览功能
+        document.getElementById('avatarInput').addEventListener('change', function(e) {
+            const preview = document.getElementById('avatarPreview');
+            const file = e.target.files[0];
+            
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    preview.src = e.target.result;
+                    preview.style.display = 'block';
+                }
+                reader.onerror = function(e) {
+                    console.error('头像预览失败:', e);
+                    preview.style.display = 'none';
+                    alert('头像预览失败，请重试');
+                }
+                reader.readAsDataURL(file);
+            } else {
+                preview.style.display = 'none';
+            }
+        });
+
+        // 修改重置函数
+        function resetList() {
+            if (isRolling) return;
+            if (!confirm('确定要重置名单吗？这将清空已抽取的记录。')) return;
+            
+            names = [...INITIAL_NAMES];
+            usedNames.clear();
+            updateLists();
+            updateResult(null);
+            saveToServer();
+        }
+
+        // 点击模态框外部时关闭
+        window.onclick = function(event) {
+            const saveModal = document.getElementById('saveModal');
+            if (event.target == saveModal) {
+                saveModal.classList.remove('show');
+            }
+        }
+
+        // 添加主题切换功能
+        function toggleTheme() {
+            const html = document.documentElement;
+            const currentTheme = html.getAttribute('data-theme');
+            const newTheme = currentTheme === 'light' ? 'dark' : 'light';
+            html.setAttribute('data-theme', newTheme);
+            localStorage.setItem('theme', newTheme);
+        }
+
+        // 在页面加载时恢复保存的主题
+        function initTheme() {
+            const savedTheme = localStorage.getItem('theme');
+            // 如果没有保存的主题或者是light主题，都设置为dark主题
+            if (!savedTheme || savedTheme === 'light') {
+                localStorage.setItem('theme', 'dark');
+            }
+            document.documentElement.setAttribute('data-theme', localStorage.getItem('theme'));
+        }
+
+        // 添加更新日期显示的函数
+        function updateDateDisplay() {
+            const now = new Date();
+            const options = { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' };
+            const dateStr = now.toLocaleDateString('zh-CN', options);
+            document.getElementById('dateDisplay').textContent = dateStr;
+        }
+
+        // 修改显示保存对话框的函数
+        function showSaveModal() {
+            const modal = document.getElementById('saveModal');
+            const stateDisplay = document.getElementById('stateDisplay');
+            const state = {
+                usedNames: Array.from(usedNames),
+                lastResult: document.querySelector('.result-name').textContent,
+                lastAvatarSrc: document.getElementById('resultAvatar').src,
+                lastAvatarDisplay: document.getElementById('resultAvatar').style.display
+            };
+            
+            stateDisplay.textContent = 'const SAVED_STATE = ' + JSON.stringify(state, null, 2) + ';';
+            modal.classList.add('show');
+        }
+
+        // 修改关闭对话框的函数
+        function closeModal() {
+            document.getElementById('saveModal').classList.remove('show');
+        }
+
+        // 优化LeanCloud保存结果函数
+        async function saveResult(name, avatar) {
+            try {
+                // 创建 LeanCloud 对象
+                const Result = AV.Object.extend('Result');
+                const result = new Result();
+                
+                // 设置数据
+                result.set('name', name);
+                result.set('avatar', avatar);
+                result.set('timestamp', new Date());
+                result.set('device', navigator.userAgent);  // 添加设备信息
+                
+                // 保存到云端
+                await result.save();
+                updateSyncStatus('保存成功');
+                
+                // 添加乐观更新
+                const historyList = document.getElementById('historyList');
+                const historyItem = document.createElement('div');
+                historyItem.className = 'history-item';
+                historyItem.innerHTML = `
+                    <img src="${avatar || 'assets/default-avatar.png'}" alt="${name}">
+                    <div>
+                        <div>${name}</div>
+                        <div class="time">${new Date().toLocaleString('zh-CN')}</div>
+                    </div>
+                `;
+                historyList.insertBefore(historyItem, historyList.firstChild);
+                
+                // 限制显示最近10条记录
+                while (historyList.children.length > 10) {
+                    historyList.removeChild(historyList.lastChild);
+                }
+                
+            } catch (error) {
+                console.error('保存结果失败:', error);
+                updateSyncStatus('保存失败');
+                // 添加重试机制
+                setTimeout(() => saveResult(name, avatar), 3000);
+            }
+        }
+
+        // 优化历史记录加载函数
+        async function loadHistory() {
+            try {
+                // 创建查询
+                const query = new AV.Query('Result');
+                query.descending('timestamp');
+                query.limit(10);
+                
+                // 添加缓存策略
+                query.addDescending('updatedAt');
+                
+                // 执行查询
+                const results = await query.find();
+                
+                const historyList = document.getElementById('historyList');
+                const fragment = document.createDocumentFragment();
+                
+                results.forEach(result => {
+                    const name = result.get('name');
+                    const avatar = result.get('avatar');
+                    const timestamp = result.get('timestamp');
+                    const timeStr = timestamp.toLocaleString('zh-CN');
+                    
+                    const historyItem = document.createElement('div');
+                    historyItem.className = 'history-item';
+                    historyItem.innerHTML = `
+                        <img src="${avatar || 'assets/default-avatar.png'}" alt="${name}" 
+                             onerror="this.src='assets/default-avatar.png'">
+                        <div>
+                            <div>${name}</div>
+                            <div class="time">${timeStr}</div>
+                        </div>
+                    `;
+                    fragment.appendChild(historyItem);
+                });
+                
+                // 批量更新DOM
+                historyList.innerHTML = '';
+                historyList.appendChild(fragment);
+                
+            } catch (error) {
+                console.error('加载历史记录失败:', error);
+                updateSyncStatus('加载失败');
+            }
+        }
+
+        // 修改同步状态显示函数
+        function updateSyncStatus(message) {
+            const syncStatus = document.getElementById('syncStatus');
+            syncStatus.textContent = `同步状态: ${message}`;
+            
+            // 添加视觉反馈
+            syncStatus.style.opacity = '1';
+            syncStatus.style.backgroundColor = message.includes('失败') ? '#ff4d4f' : '#52c41a';
+            syncStatus.style.color = '#ffffff';
+            
+            // 3秒后恢复默认状态
+            setTimeout(() => {
+                syncStatus.textContent = '同步状态: 已连接';
+                syncStatus.style.backgroundColor = 'var(--card-bg)';
+                syncStatus.style.color = 'var(--text-color)';
+                syncStatus.style.opacity = '0.8';
+            }, 3000);
+        }
     </script>
 </body>
-</html> 
+</html> %                                                                       lvfei@localhost yaoren 5.0 % 
+lvfei@localhost yaoren 5.0 % 
